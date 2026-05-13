@@ -55,13 +55,73 @@ function getBody(req) {
   });
 }
 
+function sendJSON(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+  res.end(JSON.stringify(data));
+}
+
 const PORT = process.env.PORT || 3000;
+const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : `http://localhost:${PORT}`;
 
 const httpServer = http.createServer(async (req, res) => {
+  // CORS preflight
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization"
+    });
+    res.end();
+    return;
+  }
+
+  // Health check
   if (req.url === "/health") {
     res.writeHead(200); res.end("OK"); return;
   }
 
+  // OAuth metadata - required by Claude
+  if (req.url === "/.well-known/oauth-authorization-server" || req.url === "/.well-known/openid-configuration") {
+    sendJSON(res, 200, {
+      issuer: BASE_URL,
+      authorization_endpoint: `${BASE_URL}/oauth/authorize`,
+      token_endpoint: `${BASE_URL}/oauth/token`,
+      response_types_supported: ["code"],
+      grant_types_supported: ["authorization_code"],
+    });
+    return;
+  }
+
+  // OAuth authorize - just redirect back with a fake code
+  if (req.url?.startsWith("/oauth/authorize")) {
+    const params = new URL(req.url, BASE_URL).searchParams;
+    const redirect_uri = params.get("redirect_uri");
+    const state = params.get("state");
+    if (redirect_uri) {
+      const redirectUrl = new URL(redirect_uri);
+      redirectUrl.searchParams.set("code", "atria-static-code");
+      if (state) redirectUrl.searchParams.set("state", state);
+      res.writeHead(302, { "Location": redirectUrl.toString() });
+      res.end();
+    } else {
+      res.writeHead(400); res.end("Missing redirect_uri");
+    }
+    return;
+  }
+
+  // OAuth token - return a static token
+  if (req.url === "/oauth/token" && req.method === "POST") {
+    sendJSON(res, 200, {
+      access_token: "atria-static-token",
+      token_type: "Bearer",
+      expires_in: 86400
+    });
+    return;
+  }
+
+  // MCP endpoint
   if (req.url === "/mcp") {
     const server = new McpServer({ name: "atria-mcp", version: "1.0.0" });
 
