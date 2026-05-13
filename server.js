@@ -56,7 +56,12 @@ function getBody(req) {
 }
 
 function sendJSON(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, MCP-Protocol-Version",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
+  });
   res.end(JSON.stringify(data));
 }
 
@@ -66,12 +71,14 @@ const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   : `http://localhost:${PORT}`;
 
 const httpServer = http.createServer(async (req, res) => {
+  console.log(`${req.method} ${req.url}`);
+
   // CORS preflight
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization"
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, MCP-Protocol-Version"
     });
     res.end();
     return;
@@ -82,19 +89,32 @@ const httpServer = http.createServer(async (req, res) => {
     res.writeHead(200); res.end("OK"); return;
   }
 
-  // OAuth metadata - required by Claude
-  if (req.url === "/.well-known/oauth-authorization-server" || req.url === "/.well-known/openid-configuration") {
+  // OAuth protected resource metadata (both variants Claude checks)
+  if (req.url === "/.well-known/oauth-protected-resource/mcp" ||
+      req.url === "/.well-known/oauth-protected-resource") {
+    sendJSON(res, 200, {
+      resource: `${BASE_URL}/mcp`,
+      authorization_servers: [`${BASE_URL}`],
+      bearer_methods_supported: ["header"]
+    });
+    return;
+  }
+
+  // OAuth authorization server metadata
+  if (req.url === "/.well-known/oauth-authorization-server" ||
+      req.url === "/.well-known/openid-configuration") {
     sendJSON(res, 200, {
       issuer: BASE_URL,
       authorization_endpoint: `${BASE_URL}/oauth/authorize`,
       token_endpoint: `${BASE_URL}/oauth/token`,
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code"],
+      code_challenge_methods_supported: ["S256"]
     });
     return;
   }
 
-  // OAuth authorize - just redirect back with a fake code
+  // OAuth authorize
   if (req.url?.startsWith("/oauth/authorize")) {
     const params = new URL(req.url, BASE_URL).searchParams;
     const redirect_uri = params.get("redirect_uri");
@@ -111,7 +131,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // OAuth token - return a static token
+  // OAuth token
   if (req.url === "/oauth/token" && req.method === "POST") {
     sendJSON(res, 200, {
       access_token: "atria-static-token",
