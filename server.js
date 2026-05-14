@@ -59,15 +59,14 @@ function json(res, status, data) {
   res.end(body);
 }
 
-// MCP tools definition
 const TOOLS = [
   {
     name: "search_ads",
-    description: "Search Atria's ad library by keyword, platform, or format.",
+    description: "Search Atria's global ad library by keyword, platform, or format.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search keyword" },
+        query: { type: "string", description: "Search keyword (brand name, product, topic)" },
         platform: { type: "array", items: { type: "string", enum: ["facebook","instagram","tiktok","messenger","threads","whatsapp","linkedin"] } },
         display_format: { type: "array", items: { type: "string", enum: ["image","video","carousel","dco"] } },
         sort_by: { type: "string", enum: ["most_recent","longest_running"] },
@@ -102,12 +101,35 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        brand_id: { type: "string" },
+        brand_id: { type: "string", description: "Brand ID from search_brands or get_followed_brands" },
         sort_by: { type: "string", enum: ["most_recent","longest_running"] },
         platform: { type: "array", items: { type: "string" } },
         cursor: { type: "string" }
       },
       required: ["brand_id"]
+    }
+  },
+  {
+    name: "get_followed_brands",
+    description: "Get all brands you are following/tracking in your Atria workspace. Perfect for a quick sweep of all your competitors at once.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        page: { type: "number", description: "Page number (default 1)" },
+        page_size: { type: "number", description: "Results per page, max 100 (default 20)" }
+      }
+    }
+  },
+  {
+    name: "search_brands",
+    description: "Search Atria's global brand catalog by name. Use this to find the brand_id of any competitor before pulling their ads.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        keyword: { type: "string", description: "Brand name to search for" },
+        platform: { type: "array", items: { type: "string", enum: ["meta_ad_library","tiktok_ad_library"] }, description: "Filter by platform" }
+      },
+      required: ["keyword"]
     }
   }
 ];
@@ -131,8 +153,32 @@ async function callTool(name, args) {
       return { total: d.items.length, cursor: d.cursor, ads: formatAds(d.items) };
     }
     case "get_brand_ads": {
-      const d = await atriaFetch("/ads", args);
+      const d = await atriaFetch(`/brands/${args.brand_id}/ads`, {
+        sort_by: args.sort_by, platform: args.platform, cursor: args.cursor
+      });
       return { total: d.items.length, cursor: d.cursor, ads: formatAds(d.items) };
+    }
+    case "get_followed_brands": {
+      const d = await atriaFetch("/brands", {
+        page: args.page, page_size: args.page_size
+      });
+      const brands = (d.items || []).map(b => ({
+        id: b.id, name: b.name, platform: b.ad_library,
+        ad_count: b.ad_num, website: b.website,
+        avatar: b.avatar_url
+      }));
+      return { total: brands.length, brands };
+    }
+    case "search_brands": {
+      const d = await atriaFetch("/brands/search", {
+        keyword: args.keyword, platform: args.platform
+      });
+      const brands = (d.items || []).map(b => ({
+        id: b.id, name: b.name, platform: b.ad_library,
+        ad_count: b.ad_num, website: b.website,
+        avatar: b.avatar_url
+      }));
+      return { total: brands.length, brands };
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
@@ -176,7 +222,6 @@ const httpServer = http.createServer(async (req, res) => {
   }
 
   if (url === "/mcp") {
-    // Handle GET - return server info
     if (req.method === "GET") {
       json(res, 200, { name: "atria-mcp", version: "1.0.0", protocolVersion: "2024-11-05" }); return;
     }
@@ -191,19 +236,10 @@ const httpServer = http.createServer(async (req, res) => {
       const { method, params, id } = request;
 
       if (method === "initialize") {
-        json(res, 200, {
-          jsonrpc: "2.0", id,
-          result: {
-            protocolVersion: "2024-11-05",
-            serverInfo: { name: "atria-mcp", version: "1.0.0" },
-            capabilities: { tools: {} }
-          }
-        }); return;
+        json(res, 200, { jsonrpc: "2.0", id, result: { protocolVersion: "2024-11-05", serverInfo: { name: "atria-mcp", version: "1.0.0" }, capabilities: { tools: {} } } }); return;
       }
 
-      if (method === "notifications/initialized") {
-        res.writeHead(204); res.end(); return;
-      }
+      if (method === "notifications/initialized") { res.writeHead(204); res.end(); return; }
 
       if (method === "tools/list") {
         json(res, 200, { jsonrpc: "2.0", id, result: { tools: TOOLS } }); return;
